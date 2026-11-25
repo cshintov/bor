@@ -361,6 +361,23 @@ type HistoricalStateReader struct {
 	db     *Database
 	reader *historyReader
 	id     uint64
+	root   common.Hash
+}
+
+// validate checks that the state this reader was opened on is still the
+// canonical state with its ID. A recovery (rewind) truncates the newer state
+// histories, and the IDs may then be reused by a different chain; the cached
+// ID alone would silently serve another state. Called after the read, so a
+// truncation that races with the read is caught as well.
+func (r *HistoricalStateReader) validate() error {
+	meta, err := readStateHistoryMeta(r.db.stateFreezer, r.id+1)
+	if err != nil {
+		return fmt.Errorf("historical state %#x is no longer available: %w", r.root, err)
+	}
+	if meta.parent != r.root {
+		return fmt.Errorf("historical state %#x is no longer canonical", r.root)
+	}
+	return nil
 }
 
 // HistoricReader constructs a reader for accessing the requested historic state.
@@ -394,6 +411,7 @@ func (db *Database) HistoricReader(root common.Hash) (*HistoricalStateReader, er
 		id:     *id,
 		db:     db,
 		reader: newHistoryReader(db.diskdb, db.stateFreezer),
+		root:   root,
 	}, nil
 }
 
@@ -424,7 +442,14 @@ func (r *HistoricalStateReader) AccountRLP(address common.Address) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	return r.reader.read(newAccountIdentQuery(address, hash), r.id, dl.stateID(), latest)
+	blob, err := r.reader.read(newAccountIdentQuery(address, hash), r.id, dl.stateID(), latest)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	return blob, nil
 }
 
 // Account directly retrieves the account associated with a particular address in
@@ -475,5 +500,12 @@ func (r *HistoricalStateReader) Storage(address common.Address, key common.Hash)
 	if err != nil {
 		return nil, err
 	}
-	return r.reader.read(newStorageIdentQuery(address, addrHash, key, keyHash), r.id, dl.stateID(), latest)
+	blob, err := r.reader.read(newStorageIdentQuery(address, addrHash, key, keyHash), r.id, dl.stateID(), latest)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	return blob, nil
 }
