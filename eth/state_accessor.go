@@ -281,7 +281,16 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		// Not yet the searched for transaction, execute on top of the current state
 		statedb.SetTxContext(tx.Hash(), idx)
 		// nolint : contextcheck
-		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
+		_, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas()))
+
+		// A failed state read leaves accounts looking empty, which surfaces as a
+		// misleading error (e.g. nonce too high) for this transaction. Report the
+		// read error itself.
+		if dbErr := statedb.Error(); dbErr != nil {
+			release()
+			return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("state read failed while replaying transaction %#x: %w", tx.Hash(), dbErr)
+		}
+		if err != nil {
 			release()
 			return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}

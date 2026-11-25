@@ -1523,6 +1523,12 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 
 	// Handle normal transactions
 	_, err = core.ApplyTransactionWithEVM(message, new(core.GasPool).AddGas(message.GasLimit), statedb, vmctx.BlockNumber, txctx.BlockHash, vmctx.Time, tx, &usedGas, evm)
+
+	// A failed state read invalidates the trace and can surface as a misleading
+	// error (e.g. nonce too high), so report the read error itself.
+	if dbErr := statedb.Error(); dbErr != nil {
+		return nil, 0, fmt.Errorf("tracing failed: state read error: %w", dbErr)
+	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("tracing failed: %w", err)
 	}
