@@ -18,6 +18,7 @@ package state
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -96,6 +97,62 @@ func (r *historicReader) Storage(addr common.Address, key common.Hash) (common.H
 	var slot common.Hash
 	slot.SetBytes(content)
 	return slot, nil
+}
+
+// historicFallbackReader serves a path-scheme state from the state history
+// once the live layer tree no longer holds it. A state opened from the live
+// tree can be flattened past by a concurrent commit (cap) while it is still
+// being read, e.g. by a long-running trace; the live readers then report the
+// layer as stale, while the state history for the same root is already
+// written and indexed.
+//
+// The history reader is opened lazily because it is unavailable while the
+// state is still live, and a failed open is retried on the next read.
+type historicFallbackReader struct {
+	triedb *triedb.Database
+	root   common.Hash
+	lock   sync.Mutex // historicReader is not thread-safe
+	reader *historicReader
+}
+
+func newHistoricFallbackReader(triedb *triedb.Database, root common.Hash) *historicFallbackReader {
+	return &historicFallbackReader{triedb: triedb, root: root}
+}
+
+func (r *historicFallbackReader) open() (*historicReader, error) {
+	if r.reader == nil {
+		hr, err := r.triedb.HistoricReader(r.root)
+		if err != nil {
+			return nil, err
+		}
+		r.reader = newHistoricReader(hr)
+	}
+	return r.reader, nil
+}
+
+// Account implements StateReader, retrieving the account specified by the address.
+func (r *historicFallbackReader) Account(addr common.Address) (*types.StateAccount, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	hr, err := r.open()
+	if err != nil {
+		return nil, err
+	}
+	return hr.Account(addr)
+}
+
+// Storage implements StateReader, retrieving the storage slot specified by the
+// address and slot key.
+func (r *historicFallbackReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	hr, err := r.open()
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return hr.Storage(addr, key)
 }
 
 // HistoricDB is the implementation of Database interface, with the ability to

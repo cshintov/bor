@@ -247,6 +247,11 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	}
 	readers = append(readers, tr)
 
+	// In path mode, fall back to the state history if the state is flattened
+	// past while it is still being read and the live readers report it stale.
+	if db.TrieDB().Scheme() == rawdb.PathScheme {
+		readers = append(readers, newHistoricFallbackReader(db.triedb, stateRoot))
+	}
 	combined, err := newMultiStateReader(readers...)
 	if err != nil {
 		return nil, err

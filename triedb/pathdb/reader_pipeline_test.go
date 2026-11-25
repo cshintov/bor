@@ -124,14 +124,13 @@ func TestReaderStaleFallbackHelpers(t *testing.T) {
 	}
 	r := &reader{db: db, layer: stale, noHashCheck: true}
 
+	// The reader's state is not the base disk layer and not a descendant of
+	// it, so the base cannot stand in for it: its data belongs to another
+	// state. All fallbacks must report staleness rather than serve it.
 	blob, err := r.nodeWalk(common.Hash{}, []byte{1}, common.Hash{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errSnapshotStale)
 	require.Nil(t, blob)
 
-	// The reader's state is not the base disk layer and not a descendant of
-	// it, so the base cannot stand in for it: its flat data belongs to another
-	// state and there is no hash to catch the substitution. Both fallbacks must
-	// report staleness rather than serve it.
 	blob, err = r.accountFallback(common.HexToHash("0x1"))
 	require.ErrorIs(t, err, errSnapshotStale)
 	require.Nil(t, blob)
@@ -140,11 +139,21 @@ func TestReaderStaleFallbackHelpers(t *testing.T) {
 	require.ErrorIs(t, err, errSnapshotStale)
 	require.Nil(t, blob)
 
-	blob, got, loc, err := r.nodeFallback(common.Hash{}, []byte{1})
+	blob, _, _, err = r.nodeFallback(common.Hash{}, []byte{1})
+	require.ErrorIs(t, err, errSnapshotStale)
+	require.Nil(t, blob)
+
+	// A reader whose state is the base disk layer still falls back to it.
+	base := &reader{db: db, layer: stale, noHashCheck: true, state: db.tree.bottom().rootHash()}
+	blob, got, loc, err := base.nodeFallback(common.Hash{}, []byte{1})
 	require.NoError(t, err)
 	require.Nil(t, blob)
 	require.NotEqual(t, common.Hash{}, got)
 	require.Equal(t, locDiskLayer, loc.loc)
+
+	blob, err = base.nodeWalk(common.Hash{}, []byte{1}, common.Hash{})
+	require.NoError(t, err)
+	require.Nil(t, blob)
 
 	evictCachedNode(stale, common.Hash{}, []byte{1})
 	require.Equal(t, "loc: diff, depth: 4", (&nodeLoc{loc: locDiffLayer, depth: 4}).string())

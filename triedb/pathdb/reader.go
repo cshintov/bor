@@ -193,8 +193,16 @@ func evictCachedNode(l layer, owner common.Hash, path []byte) {
 // walk, so retrying r.layer.node would deterministically hit the same stale
 // disk layer. Go straight to tree.bottom(), the current base disk layer,
 // which holds the flattened data and is guaranteed non-stale.
+//
+// The base is used only when it is an ancestor of (or equal to) the reader's
+// state. If the base has advanced past the reader's state, its nodes belong to
+// a newer state, so report the reader as stale rather than a hash mismatch.
 func (r *reader) nodeFallback(owner common.Hash, path []byte) ([]byte, common.Hash, *nodeLoc, error) {
-	return r.db.tree.bottom().node(owner, path, 0)
+	base := r.db.tree.bottomIfAncestorOf(r.state)
+	if base == nil {
+		return nil, common.Hash{}, nil, fmt.Errorf("[%#x] %w", r.state, errSnapshotStale)
+	}
+	return base.node(owner, path, 0)
 }
 
 // AccountRLP directly retrieves the account associated with a particular hash.
